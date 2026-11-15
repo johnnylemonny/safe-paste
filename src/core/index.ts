@@ -3,3 +3,4 @@ export * from './types';
 export * from './overlap';
 export * from './redact';
 export * from './detect';
+export * from './rules/github_pat';

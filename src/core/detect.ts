@@ -1,4 +1,5 @@
 import { resolveOverlaps } from './overlap';
+import { defaultMvpRules } from './rules/github_pat';
 import type {
   DetectionResult,
   DetectOptions,
@@ -40,7 +41,7 @@ export function detect(
     };
   }
 
-  const rules = options.rules ?? [];
+  const rules = options.rules ?? defaultMvpRules;
   if (rules.length === 0) {
     return {
       status: 'clean',

@@ -17,8 +17,13 @@ export function compareFindings(a: Finding, b: Finding): number {
 }
 
 /**
- * Sorts and resolves overlapping findings using a deterministic greedy interval selection.
- * Retains longer/earlier matches and discards overlapping subsequent findings.
+ * Sorts and resolves overlapping findings using deterministic range merging.
+ *
+ * Security Guarantee:
+ * Never silently loses coverage of detected sensitive ranges.
+ * If two findings overlap (e.g. [10, 40) and [30, 60)), their ranges are merged
+ * into a single unified range [10, 60) so that no sensitive characters are left unredacted.
+ * Directly adjacent findings (e.g. [0, 5) and [5, 10)) are preserved as distinct findings.
  */
 export function resolveOverlaps(findings: readonly Finding[]): Finding[] {
   if (findings.length <= 1) {
@@ -27,15 +32,30 @@ export function resolveOverlaps(findings: readonly Finding[]): Finding[] {
 
   const sorted = [...findings].sort(compareFindings);
   const resolved: Finding[] = [];
-  let lastAcceptedEnd = -1;
+  let current = sorted[0];
 
-  for (const finding of sorted) {
-    // Only accept if this finding starts at or after the previous accepted end
-    if (finding.range.start >= lastAcceptedEnd) {
-      resolved.push(finding);
-      lastAcceptedEnd = finding.range.end;
+  for (let i = 1; i < sorted.length; i++) {
+    const candidate = sorted[i];
+
+    // If candidate starts before current ends, they overlap
+    if (candidate.range.start < current.range.end) {
+      const mergedEnd = Math.max(current.range.end, candidate.range.end);
+      const isExpanded = candidate.range.end > current.range.end;
+
+      current = {
+        ...current,
+        id: isExpanded ? `${current.id}+${candidate.id}` : current.id,
+        range: {
+          start: current.range.start,
+          end: mergedEnd,
+        },
+      };
+    } else {
+      resolved.push(current);
+      current = candidate;
     }
   }
 
+  resolved.push(current);
   return resolved;
 }

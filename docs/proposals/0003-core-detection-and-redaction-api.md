@@ -157,11 +157,13 @@ When multiple rules produce findings on the same text, overlaps must be resolved
    - Secondary (same start): longer match first (`b.range.end - a.range.end`). This prioritizes specific, full token matches over substring rules.
    - Tertiary (identical range): deterministic tie-breaker by `id` (`a.id.localeCompare(b.id)`).
 
-2. **Greedy Disjoint Selection:**
-   - Iterate through sorted findings.
-   - Maintain `lastAcceptedEnd`.
-   - If `candidate.range.start >= lastAcceptedEnd`, accept the candidate and set `lastAcceptedEnd = candidate.range.end`.
-   - If `candidate.range.start < lastAcceptedEnd`, the candidate overlaps and is safely dropped.
+2. **Deterministic Range Merging (Full Sensitive Coverage Guarantee):**
+   - As established in `docs/design.md`, silently dropping overlapping findings (e.g. dropping `[30, 60)` when overlapping with `[10, 40)`) would leave `[40, 60)` unredacted.
+   - Core guarantees that overlap resolution **never silently loses coverage** of any detected sensitive range:
+     - If candidate starts before current range ends (`candidate.start < current.end`), the ranges are merged into `[current.start, max(current.end, candidate.end))`.
+     - Contained ranges (e.g. `[15, 30)` inside `[10, 40)`) are fully subsumed.
+     - Directly adjacent ranges (`[0, 5)` and `[5, 10)`) are preserved as distinct findings.
+     - Transitive overlaps (`[10, 30)`, `[25, 45)`, `[40, 65)`) are continuously unified into `[10, 65)`.
 
 ### 3.2 Slice & Rebuild Redaction
 

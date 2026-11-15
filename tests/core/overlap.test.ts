@@ -64,22 +64,40 @@ describe('Core Overlap Module', () => {
     );
   });
 
-  it('drops partially overlapping subsequent finding', () => {
-    const f1 = createFinding('first', 0, 10);
-    const f2 = createFinding('second_overlapping', 8, 18);
+  it('merges partially overlapping findings to ensure complete sensitive range coverage', () => {
+    // Finding A: [10, 40), Finding B: [30, 60)
+    // Merged: [10, 60) so that [40, 60) is never leaked unredacted
+    const f1 = createFinding('finding_a', 10, 40);
+    const f2 = createFinding('finding_b', 30, 60);
 
     const resolved = resolveOverlaps([f1, f2]);
     assert.equal(resolved.length, 1);
-    assert.equal(resolved[0].id, 'first');
+    assert.equal(resolved[0].range.start, 10);
+    assert.equal(resolved[0].range.end, 60);
+    assert.equal(resolved[0].id, 'finding_a+finding_b');
   });
 
-  it('drops contained finding inside a larger match', () => {
+  it('merges transitively overlapping findings across multiple ranges', () => {
+    // A: [10, 30), B: [25, 45), C: [40, 65) -> all overlap transitively into [10, 65)
+    const f1 = createFinding('f1', 10, 30);
+    const f2 = createFinding('f2', 25, 45);
+    const f3 = createFinding('f3', 40, 65);
+
+    const resolved = resolveOverlaps([f2, f3, f1]);
+    assert.equal(resolved.length, 1);
+    assert.equal(resolved[0].range.start, 10);
+    assert.equal(resolved[0].range.end, 65);
+  });
+
+  it('subsumes contained finding inside a larger match without shrinking', () => {
     const parent = createFinding('parent', 0, 30);
     const child = createFinding('contained', 10, 20);
 
     const resolved = resolveOverlaps([child, parent]);
     assert.equal(resolved.length, 1);
     assert.equal(resolved[0].id, 'parent');
+    assert.equal(resolved[0].range.start, 0);
+    assert.equal(resolved[0].range.end, 30);
   });
 
   it('handles empty and single-element arrays', () => {

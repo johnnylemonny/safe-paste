@@ -41,9 +41,11 @@ Always review your text before posting.
 
 Never expose complete secrets through previews, tooltips, attributes, accessibility labels, hidden elements, or data attributes. Fixed masks identify category without disclosing credential length or suffixes.
 
-Redact explicitly requests replacement of all findings in the current paste session, for example `GITHUB_TOKEN=[REDACTED_GITHUB_PAT]`. Individual selection is deferred. The Adapter validates before writing. Success says “2 detected tokens redacted. Always review your text before posting.” Dismiss leaves content unchanged, removes the panel, and releases session data.
+Redact explicitly requests replacement of all findings in the current paste session, for example `GITHUB_TOKEN=[REDACTED_GITHUB_PAT]`. Individual selection is deferred. Redaction must originate from an explicit, trusted user interaction: validate [`event.isTrusted`](https://dom.spec.whatwg.org/#dom-event-istrusted) at the UI activation boundary and ignore synthetic or programmatically dispatched activation events. Use native button activation so legitimate keyboard and assistive technology interactions remain supported; do not require pointer-only gestures. The Adapter must still validate the session and editor before writing. Success says “2 detected tokens redacted. Always review your text before posting.” Dismiss leaves content unchanged, removes the panel, and releases session data.
 
 If validation fails: “The editor content has changed. SafePaste could not apply the redaction. Please review your text manually or paste it again.” Never relocate matches in edited content. No clean-result banner is needed when detection completes without findings.
+
+On expiration, remove or disable Redact and show a concise, non-blocking message: “SafePaste's review session has expired. Please review your text manually or paste it again.” The expired UI retains no sensitive session data and never displays raw values.
 
 ## Architecture and responsibilities
 
@@ -53,7 +55,7 @@ flowchart TD
     Adapter --> Core
     Core --> Adapter
     Adapter --> UI
-    UI -->|Explicit user action| Adapter
+    UI -->|Trusted explicit user action| Adapter
     Adapter -->|Validated redaction only| Editor
 ```
 
@@ -69,9 +71,13 @@ Prefer category, offsets, and replacement metadata over copies of raw secrets. C
 
 Each editor has at most one active session with its own identity/generation. A new paste supersedes that editor's previous session; other editors remain independent. Capture only necessary clipboard text, editor identity, selection/insertion evidence, validation state, and findings. Do not retain the clipboard event object unnecessarily.
 
+Every paste session must have a finite lifetime measured from its creation, including scanning and review time. Waiting for user interaction must not retain sensitive data indefinitely. A 60-second TTL is a candidate, not a finalized requirement; the duration must balance privacy, usability, accessibility, and simplicity. Expiration invalidates the session, releases unnecessary clipboard text, findings, editor snapshots, and other sensitive references, and prohibits redaction. It never modifies editor content or triggers a scan.
+
+Schedule cleanup on a best-effort basis, accounting for timer throttling and suspended tabs. A delayed timer does not extend session validity: check expiration when execution resumes, in asynchronous callbacks, and immediately before replacement. Exact real-time cleanup is not guaranteed. Lifetime bookkeeping requires no input monitoring or editor polling; the clock and scheduling strategy remain open.
+
 At paste time, capture bounded evidence needed to identify the selection being replaced. After native paste, establish the actual inserted range through a one-time integrity check. Account for newline normalization, selection replacement, and GitHub transformations; clipboard text need not equal inserted text. Detection remains exclusively over captured clipboard plaintext. Mapping clipboard findings to inserted ranges must be unambiguous and verified, without detecting secrets in the editor. Reject unsupported transformations, ambiguous mapping, or intervening changes. Scheduling alone does not prove insertion has finished; compatibility experiments must establish the observation point.
 
-These limited integrity reads at session establishment and an explicit Redact action are not continuous monitoring or additional sensitive-data scans. No input/keyboard listeners or ongoing editor-value polling are permitted. Lifecycle observation may identify removed nodes/navigation without inspecting their text. Bound validation work and retained editor evidence too; large existing editor content must not defeat the paste budget. If safe evidence cannot be obtained within limits, disable redaction and explain the limitation.
+These limited integrity reads at session establishment and an explicit Redact action are not continuous monitoring or additional sensitive-data scans. No editor input/keyboard monitoring or ongoing editor-value polling is permitted; accessible activation of SafePaste controls is separate from editor monitoring. Lifecycle observation may identify removed nodes/navigation without inspecting their text. Bound validation work and retained editor evidence too; large existing editor content must not defeat the paste budget. If safe evidence cannot be obtained within limits, disable redaction and explain the limitation.
 
 ```mermaid
 stateDiagram-v2
@@ -81,22 +87,26 @@ stateDiagram-v2
     Scanning --> Reviewing: Findings and insertion evidence
     Scanning --> Failed: Error or processing limit
     Scanning --> Stale: Invalid insertion evidence
-    Reviewing --> Validating: Redact
+    Reviewing --> Validating: Trusted explicit Redact
     Reviewing --> Dismissed: Dismiss
     Validating --> Redacted: Checks and write succeed
     Validating --> Stale: Integrity mismatch
     Validating --> Failed: Replacement fails
     Scanning --> Dismissed: Superseded or invalidated
     Reviewing --> Dismissed: Superseded or invalidated
+    Scanning --> Expired: Lifetime elapsed
+    Reviewing --> Expired: Lifetime elapsed
+    Validating --> Expired: Final expiration check fails
+    Expired --> [*]
     Redacted --> [*]
     Dismissed --> [*]
     Stale --> [*]
     Failed --> [*]
 ```
 
-Every callback must check session generation before updating state or UI. Removal, replacement, navigation, or superseding paste invalidates pending results and releases references. No stale result may recreate a panel.
+Every callback must check session generation and expiration before updating state or UI. Expired sessions cannot be revived by delayed results. Removal, replacement, navigation, or superseding paste invalidates pending results and releases references. No stale result may recreate a panel.
 
-Before writing, verify the session is active, the original editor exists and is the same supported instance/context, its relevant state exactly matches the established post-paste state, and every range still maps consistently to that paste. Validate offset units, bounds and overlaps before deterministic replacement, preserving unrelated content. Recheck and write together without an asynchronous gap. Do not rescan, relocate, fuzzy-match, replace occurrences globally, or merge edits. Any failed check cancels without modifying content.
+After trusted UI activation, the Adapter must verify the session is active and unexpired, the original editor exists and is the same supported instance/context, its relevant state exactly matches the established post-paste state, and every range still maps consistently to that paste. Validate offset units, bounds and overlaps before deterministic replacement, preserving unrelated content. Recheck expiration immediately before editor modification, together with integrity checks and the write, without an asynchronous gap. Do not rescan, relocate, fuzzy-match, replace occurrences globally, or merge edits. Any failed check cancels without modifying content.
 
 Without edit monitoring, a state comparison cannot detect an edit followed by restoration to exactly the same state. “Unchanged” therefore means equality at validation, not proof of edit history. The comparison must still make replacement safe. Snapshot representation is open; do not claim a fingerprint alone proves equality. Selection/focus changes caused by clicking Redact must be distinguished from content changes during compatibility work.
 
@@ -123,7 +133,7 @@ flowchart LR
     Adapter -->|Explicit validated replacement| Editor
 ```
 
-Clipboard text and shared DOM are untrusted. A trusted event establishes browser provenance, not trustworthy text or a valid credential. Core must treat offsets and inputs defensively. Sessions are temporary sensitive memory; UI receives only safe presentation metadata. Chrome's [isolated world](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts#work_in_isolated_worlds) separates JavaScript environments, **not the shared DOM**. The page can observe editor text and panel contents; the panel is not a trusted security prompt. Shadow DOM may isolate CSS but is not a security boundary.
+Clipboard text and shared DOM are untrusted. A trusted event establishes browser provenance, not trustworthy text or a valid credential. Core must treat offsets and inputs defensively. Sessions are temporary sensitive memory; UI receives only safe presentation metadata. Chrome's [isolated world](https://developer.chrome.com/docs/extensions/develop/concepts/content-scripts#work_in_isolated_worlds) separates JavaScript environments, **not the shared DOM**. The page can observe editor text and panel contents; the panel is not a trusted browser-level security prompt. The redaction `isTrusted` check rejects synthetic event dispatch, but is neither a complete security boundary nor proof of user intent; shared-DOM manipulation remains possible. It does not replace Adapter integrity or expiration checks. Shadow DOM may isolate CSS but is not a security boundary.
 
 ### Permissions and rendering
 
@@ -137,7 +147,7 @@ Construct DOM safely with native APIs and `textContent`; never interpolate clipb
 
 Sensitive content stays local in memory only as long as needed. Prohibit localStorage, sessionStorage, IndexedDB, Chrome Storage, analytics, telemetry, remote error reporting, external API requests, remote rule loading, and secret-bearing console/debug logs or exception messages. No production component intentionally transmits sensitive user data outside the browser.
 
-Release unnecessary references after a clean scan, redaction, dismissal, invalidation, supersession, editor removal, or navigation; also clean up failed/limited sessions. JavaScript reference release does not guarantee immediate or complete memory erasure. Avoid unnecessary copies and retain no sensitive data in terminal UI messages.
+Release unnecessary references after a clean scan, redaction, dismissal, expiration, invalidation, supersession, editor removal, or navigation; also clean up failed/limited sessions. JavaScript reference release does not guarantee immediate or complete memory erasure. Avoid unnecessary copies and retain no sensitive data in terminal UI messages.
 
 Review third-party packages before adoption. When Issue #2 establishes tooling, commit lockfiles and use reproducible installs. Security-sensitive changes require review and automated checks. Use only synthetic, non-functional fixtures, never issued credentials. No CI or dependencies are introduced by this design.
 
@@ -174,11 +184,13 @@ Promises, async/await, and timers defer work but do not move CPU processing off 
 | Missing/empty plaintext | Skip; communicate unavailable nonempty plaintext when meaningful, without claiming a clean scan |
 | Detection failure | Non-blocking generic failure/manual-review message; release data |
 | Size or finding limit | Explicit incomplete/skipped message, no clean result and no redaction |
+| Expired session | Release sensitive references; show the expiration message; no replacement or rescan |
+| Synthetic redaction activation | Ignore at the UI boundary; do not invoke replacement |
 | Stale state or ambiguous insertion | Cancel replacement; show stale/manual-review message |
 | Removed/replaced editor or navigation | Dispose session/UI; never write to replacement editor |
 | Redaction failure | Generic manual-review message; no success confirmation or partial replacement |
 | Concurrent pastes | Independent editors; same-editor paste supersedes previous session |
-| Result after invalidation | Discard silently, without recreating UI |
+| Result after invalidation or expiration | Discard silently, without recreating UI |
 
 All errors are content-free and leave native GitHub behavior independent.
 
@@ -210,7 +222,11 @@ No tests are implemented by this documentation task.
 | UI | Warning/masked previews; Redact/Dismiss/stale messages; keyboard accessibility; light/dark themes; no raw secrets anywhere in generated DOM; malicious HTML-like content rendered safely |
 | Security/integration | No extension-initiated external communication, sensitive persistence or console output; minimal permissions; actual Chrome extension on GitHub; native paste, editor state synchronization, undo limitations, and end-to-end performance |
 
-Trusted-event integration tests must use actual browser paste automation/manual testing; dispatching a synthetic event does not establish trusted native paste behavior. All fixtures are synthetic and non-functional.
+Add lifetime tests during scanning, review, and validation: expiration releases sensitive references, preserves editor content, triggers no scan or input monitoring, rejects redaction at the final pre-write check, and cannot be reversed by delayed results. Simulate throttled timers and suspended/resumed tabs; validity must not depend on timely cleanup. Verify expired UI contains no sensitive data.
+
+Test rejection of `dispatchEvent()` and programmatic `.click()` attempts to redact, and successful native pointer, keyboard, and assistive technology activation followed by Adapter validation. Verify a trusted activation still fails for stale or expired sessions.
+
+Trusted-event integration tests must use actual browser paste and control activation automation/manual testing; dispatching a synthetic event does not establish trusted native paste behavior. All fixtures are synthetic and non-functional.
 
 ## MVP acceptance criteria
 
@@ -222,10 +238,11 @@ Trusted-event integration tests must use actual browser paste automation/manual 
 - [ ] Does not interrupt or delay native paste pending detection.
 - [ ] Displays non-blocking warnings.
 - [ ] Displays detected values only as masked previews.
-- [ ] Allows explicit redaction.
+- [ ] Requires trusted explicit redaction, rejects synthetic activation, and supports keyboard and assistive technology activation.
 - [ ] Allows dismissal.
 - [ ] Does not scan subsequent manual edits.
 - [ ] Prevents stale sessions from causing incorrect replacement.
+- [ ] Enforces finite session validity, rechecks expiration before replacement, and schedules sensitive-reference cleanup without rescanning or modifying content; delayed results cannot revive expired sessions.
 - [ ] Targets completion within 1,000 ms under documented conditions.
 - [ ] Communicates limits and failures accurately.
 - [ ] Does not persist or transmit sensitive content.
@@ -235,8 +252,8 @@ Trusted-event integration tests must use actual browser paste automation/manual 
 
 ## Open questions and verification status
 
-Community decisions remain open: concrete Core signatures and result types; rule registration; exact PAT matching algorithms; range representation; supported selectors; DOM replacement and undo integration; snapshot representation and expiration policy; panel DOM and CSS/Shadow DOM isolation; final size/finding limits; benchmark environment; build tooling and development dependencies.
+Community decisions remain open: concrete Core signatures and result types; rule registration; exact PAT matching algorithms; range representation; supported selectors; DOM replacement and undo integration; snapshot representation, exact finite session duration, and expiration implementation strategy; panel DOM and CSS/Shadow DOM isolation; final size/finding limits; benchmark environment; build tooling and development dependencies.
 
-These choices must satisfy the fixed paste-only, non-blocking, local-only, three-layer constraints. In particular, GitHub transformation mapping, post-paste observation timing, and safe replacement/undo compatibility need browser investigation before any editor is declared supported. No selector or replacement API is assumed proven.
+These choices must satisfy the fixed paste-only, non-blocking, local-only, three-layer constraints, trusted redaction requirement, and mandatory finite session lifetime. In particular, GitHub transformation mapping, post-paste observation timing, and safe replacement/undo compatibility need browser investigation before any editor is declared supported. No selector or replacement API is assumed proven.
 
 Repository inspection found only README and MIT license, with no contribution guide or implementation. Issue #1 was reviewed; the original organization discussion could not be retrieved through the attempted GitHub API and web access. Its detailed consensus is therefore unverified; this draft follows Issue #1 and the supplied task requirements. Official Chrome, Clipboard, and GitHub references above were reviewed on 2026-11-15. Prefix documentation is verified; complete PAT grammars and browser integration remain implementation research, not claims of tested behavior.

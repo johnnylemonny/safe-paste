@@ -43,7 +43,7 @@ Never expose complete secrets through previews, tooltips, attributes, accessibil
 
 Redact explicitly requests replacement of all findings in the current paste session, for example `GITHUB_TOKEN=[REDACTED_GITHUB_PAT]`. Individual selection is deferred. Redaction must originate from an explicit, trusted user interaction: validate [`event.isTrusted`](https://dom.spec.whatwg.org/#dom-event-istrusted) at the UI activation boundary and ignore synthetic or programmatically dispatched activation events. Use native button activation so legitimate keyboard and assistive technology interactions remain supported; do not require pointer-only gestures. The Adapter must still validate the session and editor before writing. Success says “2 detected tokens redacted. Always review your text before posting.” Dismiss leaves content unchanged, removes the panel, and releases session data.
 
-If validation fails: “The editor content has changed. SafePaste could not apply the redaction. Please review your text manually or paste it again.” Never relocate matches in edited content. No clean-result banner is needed when detection completes without findings.
+If editor-state validation fails: “The editor content has changed. SafePaste could not apply the redaction. Please review your text manually or paste it again.” Never relocate matches in edited content. No clean-result banner is needed when detection completes without findings.
 
 On expiration, remove or disable Redact and show a concise, non-blocking message: “SafePaste's review session has expired. Please review your text manually or paste it again.” The expired UI retains no sensitive session data and never displays raw values.
 
@@ -65,7 +65,15 @@ flowchart TD
 | Adapter | Supported editor identification, trusted paste/plaintext capture, session coordination, Core/UI calls, validation, explicit replacement, dynamic navigation and editor lifecycle | No detection rules; a small internal session coordinator is sufficient |
 | UI | Warnings, masks, actions, stale/failure messages, accessibility and themes | No detection or direct editor writes; delegate actions to Adapter |
 
-Prefer category, offsets, and replacement metadata over copies of raw secrets. Core is independently testable and reusable. Keep module boundaries simple: no monorepo, dependency injection framework, state management framework, premature plugin system, or substantial fourth layer. Minimize runtime dependencies, preferably to zero.
+Finding metadata must not contain raw detected secrets. Detection results, replacement metadata, error messages, identifiers, and presentation metadata must never retain complete credential values. UI receives only safe presentation metadata and fixed masked previews. Concrete Finding types and API signatures remain open for [Issue #3](https://github.com/necoz-oss/safe-paste/issues/3). Core is independently testable and reusable. Keep module boundaries simple: no monorepo, dependency injection framework, state management framework, premature plugin system, or substantial fourth layer. Minimize runtime dependencies, preferably to zero.
+
+### Core range and overlap contract
+
+All text offsets are zero-indexed UTF-16 code units; all ranges are half-open intervals `[start, end)`. Offsets must be valid integers within the associated source string. Non-empty findings must satisfy `0 <= start < end <= source.length`. This aligns with JavaScript string slicing and native textarea selection APIs. These range units are distinct from the UTF-8 byte budget for input size.
+
+Neither redaction boundary may split an existing valid UTF-16 surrogate pair. Invalid or corrupted ranges must cause safe rejection before any content modification, without silently normalizing, repairing, or relocating them. SafePaste does not repair pre-existing malformed Unicode. Grapheme cluster handling and Unicode normalization are outside the MVP scope.
+
+Identical inputs and rule configurations must produce deterministic results. Redacting all findings must preserve coverage of every detected sensitive range without unnecessarily modifying unrelated text. For example, with A `[10, 40)` and B `[30, 60)`, silently discarding B would leave `[40, 60)` unredacted. Merging overlapping ranges is one possible strategy, not a finalized implementation. If overlap cannot be resolved safely, reject the replacement and prompt manual review. Sorting priorities, category selection, replacement text selection, and the overlap algorithm remain open for Issue #3.
 
 ## Paste sessions and safe redaction
 
@@ -106,7 +114,7 @@ stateDiagram-v2
 
 Every callback must check session generation and expiration before updating state or UI. Expired sessions cannot be revived by delayed results. Removal, replacement, navigation, or superseding paste invalidates pending results and releases references. No stale result may recreate a panel.
 
-After trusted UI activation, the Adapter must verify the session is active and unexpired, the original editor exists and is the same supported instance/context, its relevant state exactly matches the established post-paste state, and every range still maps consistently to that paste. Validate offset units, bounds and overlaps before deterministic replacement, preserving unrelated content. Recheck expiration immediately before editor modification, together with integrity checks and the write, without an asynchronous gap. Do not rescan, relocate, fuzzy-match, replace occurrences globally, or merge edits. Any failed check cancels without modifying content.
+After trusted UI activation, the Adapter must verify the session is active and unexpired, the original editor exists and is the same supported instance/context, its relevant state exactly matches the established post-paste state, and every range still maps consistently to that paste. Apply the Core range and overlap contract to source findings and mapped editor ranges before deterministic replacement, preserving unrelated content. Reject the entire replacement for invalid offsets, split surrogate pairs, or overlaps that cannot be resolved safely; show a non-blocking manual-review message without changing content. Recheck expiration immediately before editor modification, together with integrity checks and the write, without an asynchronous gap. Do not rescan, relocate, fuzzy-match, replace occurrences globally, or merge edits. Any failed check cancels without modifying content.
 
 Without edit monitoring, a state comparison cannot detect an edit followed by restoration to exactly the same state. “Unchanged” therefore means equality at validation, not proof of edit history. The comparison must still make replacement safe. Snapshot representation is open; do not claim a fingerprint alone proves equality. Selection/focus changes caused by clicking Redact must be distinguished from content changes during compatibility work.
 
@@ -145,7 +153,7 @@ Construct DOM safely with native APIs and `textContent`; never interpolate clipb
 
 ### Data lifecycle and dependencies
 
-Sensitive content stays local in memory only as long as needed. Prohibit localStorage, sessionStorage, IndexedDB, Chrome Storage, analytics, telemetry, remote error reporting, external API requests, remote rule loading, and secret-bearing console/debug logs or exception messages. No production component intentionally transmits sensitive user data outside the browser.
+Raw source content may remain temporarily available only where required for detection, session integrity validation, and explicit redaction. Avoid unnecessary copies of sensitive source strings and keep them separate from the secret-free finding metadata required above. These constraints do not eliminate all memory disclosure risks. Sensitive content stays local in memory only as long as needed. Prohibit localStorage, sessionStorage, IndexedDB, Chrome Storage, analytics, telemetry, remote error reporting, external API requests, remote rule loading, and secret-bearing console/debug logs or exception messages. No production component intentionally transmits sensitive user data outside the browser.
 
 Release unnecessary references after a clean scan, redaction, dismissal, expiration, invalidation, supersession, editor removal, or navigation; also clean up failed/limited sessions. JavaScript reference release does not guarantee immediate or complete memory erasure. Avoid unnecessary copies and retain no sensitive data in terminal UI messages.
 
@@ -170,7 +178,7 @@ Provisional engineering targets, subject to measurement:
 | Scan budget | Approximately 100 KiB, meaning 102,400 UTF-8 encoded bytes |
 | Findings and rendered entries | Finite caps, exact values open |
 
-JavaScript string length counts UTF-16 code units, not bytes. Measure the UTF-8 budget with bounded counting that stops at the threshold instead of allocating an encoding of arbitrarily large text. Define range units separately and test conversion/mapping with Unicode. If an input exceeds budget, the initial conservative policy is to skip detection and explain the limit. If a findings cap interrupts detection, label it incomplete and offer manual review; do not enable session redaction for an incomplete result. Final caps remain open.
+JavaScript string length counts UTF-16 code units, not bytes. Measure the UTF-8 budget with bounded counting that stops at the threshold instead of allocating an encoding of arbitrarily large text. Keep the fixed UTF-16 range contract separate from this UTF-8 budget and test conversion/mapping with Unicode. If an input exceeds budget, the initial conservative policy is to skip detection and explain the limit. If a findings cap interrupts detection, label it incomplete and offer manual review; do not enable session redaction for an incomplete result. Final caps remain open.
 
 Benchmark synthetic snippets, typical errors, multiline stack traces, large logs, no/multiple findings, malformed tokens, near/over-limit text, and adversarial regex inputs. Include large existing editor values and simultaneous editors. Measure handler duration, Core duration, end-to-end rendering, and main-thread blocking; report p50, p95, and maximum with sample counts. Document Chrome/extension versions, OS, CPU, memory, power/throttling settings, editor context, input sizes, warmup, repetitions, and timing method. No results exist yet.
 
@@ -188,6 +196,7 @@ Promises, async/await, and timers defer work but do not move CPU processing off 
 | Synthetic redaction activation | Ignore at the UI boundary; do not invoke replacement |
 | Stale state or ambiguous insertion | Cancel replacement; show stale/manual-review message |
 | Removed/replaced editor or navigation | Dispose session/UI; never write to replacement editor |
+| Invalid ranges or unsafe overlaps | Reject replacement before any write; prompt manual review without repairing or relocating ranges |
 | Redaction failure | Generic manual-review message; no success confirmation or partial replacement |
 | Concurrent pastes | Independent editors; same-editor paste supersedes previous session |
 | Result after invalidation or expiration | Discard silently, without recreating UI |
@@ -222,6 +231,13 @@ No tests are implemented by this documentation task.
 | UI | Warning/masked previews; Redact/Dismiss/stale messages; keyboard accessibility; light/dark themes; no raw secrets anywhere in generated DOM; malicious HTML-like content rendered safely |
 | Security/integration | No extension-initiated external communication, sensitive persistence or console output; minimal permissions; actual Chrome extension on GitHub; native paste, editor state synchronization, undo limitations, and end-to-end performance |
 
+Add Core contract tests for:
+
+- Zero-indexed UTF-16 offsets and half-open slicing, including string endpoints; reject fractional, non-finite, negative, reversed, empty finding, and out-of-bounds ranges.
+- Emojis and other astral Unicode characters before, within, and after ranges; reject start or end boundaries inside surrogate pairs and preserve surrounding text. Do not repair pre-existing malformed Unicode. Verify mapped textarea ranges follow the same rules.
+- Identical, nested, partially overlapping, and transitively overlapping ranges, plus adjacent non-overlapping ranges. Verify deterministic output for identical inputs/configurations, complete sensitive-range coverage, preservation of unrelated content, and safe rejection of invalid or unresolvable ranges without partial writes.
+- No raw synthetic credential values in detection results, replacement metadata, identifiers, errors, or UI presentation metadata; previews remain fixed masks.
+
 Add lifetime tests during scanning, review, and validation: expiration releases sensitive references, preserves editor content, triggers no scan or input monitoring, rejects redaction at the final pre-write check, and cannot be reversed by delayed results. Simulate throttled timers and suspended/resumed tabs; validity must not depend on timely cleanup. Verify expired UI contains no sensitive data.
 
 Test rejection of `dispatchEvent()` and programmatic `.click()` attempts to redact, and successful native pointer, keyboard, and assistive technology activation followed by Adapter validation. Verify a trusted activation still fails for stale or expired sessions.
@@ -249,11 +265,14 @@ Trusted-event integration tests must use actual browser paste and control activa
 - [ ] Requires no unnecessary extension permissions.
 - [ ] Clearly documents detection limitations.
 - [ ] Keeps Core independent of browser and GitHub APIs.
+- [ ] Uses valid UTF-16 half-open ranges and rejects invalid or surrogate-splitting boundaries before replacement.
+- [ ] Keeps raw secrets out of finding and presentation metadata.
+- [ ] Resolves overlaps deterministically without losing sensitive-range coverage or unnecessarily modifying unrelated content, or safely rejects replacement.
 
 ## Open questions and verification status
 
-Community decisions remain open: concrete Core signatures and result types; rule registration; exact PAT matching algorithms; range representation; supported selectors; DOM replacement and undo integration; snapshot representation, exact finite session duration, and expiration implementation strategy; panel DOM and CSS/Shadow DOM isolation; final size/finding limits; benchmark environment; build tooling and development dependencies.
+Community decisions remain open: concrete Core signatures and result types; rule registration; exact PAT matching algorithms; concrete range representation under the fixed UTF-16 contract; overlap sorting priorities, category/replacement selection, and resolution algorithm; supported selectors; DOM replacement and undo integration; snapshot representation, exact finite session duration, and expiration implementation strategy; panel DOM and CSS/Shadow DOM isolation; final size/finding limits; benchmark environment; build tooling and development dependencies.
 
-These choices must satisfy the fixed paste-only, non-blocking, local-only, three-layer constraints, trusted redaction requirement, and mandatory finite session lifetime. In particular, GitHub transformation mapping, post-paste observation timing, and safe replacement/undo compatibility need browser investigation before any editor is declared supported. No selector or replacement API is assumed proven.
+These choices must satisfy the fixed paste-only, non-blocking, local-only, three-layer constraints, trusted redaction requirement, mandatory finite session lifetime, and the Core range, metadata, and coverage-preservation contract. Concrete Core API decisions belong in Issue #3. In particular, GitHub transformation mapping, post-paste observation timing, and safe replacement/undo compatibility need browser investigation before any editor is declared supported. No selector or replacement API is assumed proven.
 
 Repository inspection found only README and MIT license, with no contribution guide or implementation. Issue #1 was reviewed; the original organization discussion could not be retrieved through the attempted GitHub API and web access. Its detailed consensus is therefore unverified; this draft follows Issue #1 and the supplied task requirements. Official Chrome, Clipboard, and GitHub references above were reviewed on 2026-11-15. Prefix documentation is verified; complete PAT grammars and browser integration remain implementation research, not claims of tested behavior.

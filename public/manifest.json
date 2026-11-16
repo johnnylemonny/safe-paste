@@ -1,0 +1,14 @@
+{
+  "manifest_version": 3,
+  "name": "SafePaste",
+  "version": "0.0.0",
+  "description": "SafePaste development scaffold. Detection is not implemented yet.",
+  "content_scripts": [
+    {
+      "matches": ["https://github.com/*"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle",
+      "world": "ISOLATED"
+    }
+  ]
+}

@@ -69,7 +69,7 @@ Finding metadata must not contain raw detected secrets. Detection results, repla
 
 ### Core range and overlap contract
 
-All text offsets are zero-indexed UTF-16 code units; all ranges are half-open intervals `[start, end)`. Offsets must be valid integers within the associated source string. Non-empty findings must satisfy `0 <= start < end <= source.length`. This aligns with JavaScript string slicing and native textarea selection APIs. These range units are distinct from the UTF-8 byte budget for input size.
+All text offsets are zero-indexed UTF-16 code units; all ranges are half-open intervals `[start, end)`. Offsets must be valid integers within the associated source string. Non-empty findings must satisfy `0 <= start < end <= source.length`. This aligns with JavaScript string slicing and native textarea selection APIs.
 
 Neither redaction boundary may split an existing valid UTF-16 surrogate pair. Invalid or corrupted ranges must cause safe rejection before any content modification, without silently normalizing, repairing, or relocating them. SafePaste does not repair pre-existing malformed Unicode. Grapheme cluster handling and Unicode normalization are outside the MVP scope.
 
@@ -175,10 +175,10 @@ Provisional engineering targets, subject to measurement:
 | --- | --- |
 | Typical paste | Within 100 ms |
 | Individual synchronous main-thread tasks | Approximately 16 ms or less where practical |
-| Scan budget | Approximately 100 KiB, meaning 102,400 UTF-8 encoded bytes |
+| Scan budget | 102,400 UTF-16 code units |
 | Findings and rendered entries | Finite caps, exact values open |
 
-JavaScript string length counts UTF-16 code units, not bytes. Measure the UTF-8 budget with bounded counting that stops at the threshold instead of allocating an encoding of arbitrarily large text. Keep the fixed UTF-16 range contract separate from this UTF-8 budget and test conversion/mapping with Unicode. If an input exceeds budget, the initial conservative policy is to skip detection and explain the limit. If a findings cap interrupts detection, label it incomplete and offer manual review; do not enable session redaction for an incomplete result. Final caps remain open.
+Use `string.length` to check the input budget in UTF-16 code units. This limit is not an exact measurement of memory consumption and alone does not guarantee bounded execution time or memory consumption. If an input exceeds budget, the initial conservative policy is to skip detection and explain the limit. If a findings cap interrupts detection, label it incomplete and offer manual review; do not enable session redaction for an incomplete result. The final input limit remains subject to future benchmarks, and final finding caps remain open.
 
 Benchmark synthetic snippets, typical errors, multiline stack traces, large logs, no/multiple findings, malformed tokens, near/over-limit text, and adversarial regex inputs. Include large existing editor values and simultaneous editors. Measure handler duration, Core duration, end-to-end rendering, and main-thread blocking; report p50, p95, and maximum with sample counts. Document Chrome/extension versions, OS, CPU, memory, power/throttling settings, editor context, input sizes, warmup, repetitions, and timing method. No results exist yet.
 
@@ -233,6 +233,7 @@ No tests are implemented by this documentation task.
 
 Add Core contract tests for:
 
+- Input lengths below, equal to, and above the configured limit, using ASCII, Japanese and other Unicode text, and astral characters including emojis. Verify `string.length` counts UTF-16 code units correctly, detection is skipped above the limit, and skipped or incomplete detection is reported explicitly rather than as a clean result.
 - Zero-indexed UTF-16 offsets and half-open slicing, including string endpoints; reject fractional, non-finite, negative, reversed, empty finding, and out-of-bounds ranges.
 - Emojis and other astral Unicode characters before, within, and after ranges; reject start or end boundaries inside surrogate pairs and preserve surrounding text. Do not repair pre-existing malformed Unicode. Verify mapped textarea ranges follow the same rules.
 - Identical, nested, partially overlapping, and transitively overlapping ranges, plus adjacent non-overlapping ranges. Verify deterministic output for identical inputs/configurations, complete sensitive-range coverage, preservation of unrelated content, and safe rejection of invalid or unresolvable ranges without partial writes.

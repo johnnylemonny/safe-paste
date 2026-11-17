@@ -1,3 +1,5 @@
 // Pure TypeScript only: no DOM, extension APIs, UI, network, or storage.
-// Detection and redaction APIs will be designed in Issue #3.
-export {};
+export * from './types';
+export * from './overlap';
+export * from './redact';
+export * from './detect';

@@ -1,12 +1,11 @@
-import test, { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import { redact, validateRange } from '../../src/core/redact.ts';
-import type { RedactionTarget } from '../../src/core/types.ts';
+import { describe, expect, it } from 'vitest';
+import { redact } from '../../src/core/redact';
+import type { RedactionTarget } from '../../src/core/types';
 
 describe('Core Redact Module', () => {
   it('handles empty input and empty targets gracefully', () => {
     const result = redact('', []);
-    assert.deepEqual(result, {
+    expect(result).toEqual({
       success: true,
       text: '',
       appliedCount: 0,
@@ -16,7 +15,7 @@ describe('Core Redact Module', () => {
   it('preserves text intact when targets array is empty', () => {
     const input = 'This is safe text with no tokens.\nLine 2.\tTabbed.';
     const result = redact(input, []);
-    assert.deepEqual(result, {
+    expect(result).toEqual({
       success: true,
       text: input,
       appliedCount: 0,
@@ -35,10 +34,10 @@ describe('Core Redact Module', () => {
     };
 
     const result = redact(input, [target]);
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(result.text, 'GITHUB_TOKEN=[REDACTED_GITHUB_PAT] in issue config');
-      assert.equal(result.appliedCount, 1);
+      expect(result.text).toBe('GITHUB_TOKEN=[REDACTED_GITHUB_PAT] in issue config');
+      expect(result.appliedCount).toBe(1);
     }
   });
 
@@ -59,10 +58,10 @@ describe('Core Redact Module', () => {
     ];
 
     const result = redact(input, targets);
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(result.text, '[REDACTED_1] and [REDACTED_2]');
-      assert.equal(result.appliedCount, 2);
+      expect(result.text).toBe('[REDACTED_1] and [REDACTED_2]');
+      expect(result.appliedCount).toBe(2);
     }
   });
 
@@ -74,10 +73,10 @@ describe('Core Redact Module', () => {
         replacementText: '[REDACTED_ALL]',
       },
     ]);
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(result.text, '[REDACTED_ALL]');
-      assert.equal(result.appliedCount, 1);
+      expect(result.text).toBe('[REDACTED_ALL]');
+      expect(result.appliedCount).toBe(1);
     }
   });
 
@@ -89,10 +88,10 @@ describe('Core Redact Module', () => {
     ];
 
     const result = redact(input, targets);
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(result.text, '[FIRST][SECOND]');
-      assert.equal(result.appliedCount, 2);
+      expect(result.text).toBe('[FIRST][SECOND]');
+      expect(result.appliedCount).toBe(2);
     }
   });
 
@@ -104,9 +103,9 @@ describe('Core Redact Module', () => {
     ];
 
     const result = redact(input, targets);
-    assert.equal(result.success, false);
+    expect(result.success).toBe(false);
     if (!result.success) {
-      assert.equal(result.reason, 'overlapping_targets');
+      expect(result.reason).toBe('overlapping_targets');
     }
   });
 
@@ -115,23 +114,23 @@ describe('Core Redact Module', () => {
 
     // Negative start
     const res1 = redact(input, [{ range: { start: -1, end: 3 }, replacementText: 'X' }]);
-    assert.equal(res1.success, false);
-    if (!res1.success) assert.equal(res1.reason, 'invalid_range');
+    expect(res1.success).toBe(false);
+    if (!res1.success) expect(res1.reason).toBe('invalid_range');
 
     // Start > End
     const res2 = redact(input, [{ range: { start: 4, end: 2 }, replacementText: 'X' }]);
-    assert.equal(res2.success, false);
-    if (!res2.success) assert.equal(res2.reason, 'invalid_range');
+    expect(res2.success).toBe(false);
+    if (!res2.success) expect(res2.reason).toBe('invalid_range');
 
     // End > length
     const res3 = redact(input, [{ range: { start: 0, end: 10 }, replacementText: 'X' }]);
-    assert.equal(res3.success, false);
-    if (!res3.success) assert.equal(res3.reason, 'invalid_range');
+    expect(res3.success).toBe(false);
+    if (!res3.success) expect(res3.reason).toBe('invalid_range');
 
     // Non-integer offsets
     const res4 = redact(input, [{ range: { start: 1.5, end: 3 }, replacementText: 'X' }]);
-    assert.equal(res4.success, false);
-    if (!res4.success) assert.equal(res4.reason, 'invalid_range');
+    expect(res4.success).toBe(false);
+    if (!res4.success) expect(res4.reason).toBe('invalid_range');
   });
 
   it('preserves multiline formatting, code fences, and special characters', () => {
@@ -148,10 +147,9 @@ echo "done"
       { range: { start, end }, replacementText: '[REDACTED_PAT]' },
     ]);
 
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(
-        result.text,
+      expect(result.text).toBe(
         `\`\`\`bash
 export TOKEN="[REDACTED_PAT]"
 echo "done"
@@ -161,8 +159,6 @@ echo "done"
   });
 
   it('preserves Unicode astral plane characters (emojis) correctly', () => {
-    // Emoji '🚀' is 2 UTF-16 code units (\uD83D\uDE80)
-    // Emoji '✨' is 1 UTF-16 code unit (\u2728)
     const token = 'ghp_syntheticTokenBetweenEmojis';
     const input = `🚀 Launch: ${token} ✨ done!`;
 
@@ -173,25 +169,24 @@ echo "done"
       { range: { start, end }, replacementText: '[SECRET]' },
     ]);
 
-    assert.equal(result.success, true);
+    expect(result.success).toBe(true);
     if (result.success) {
-      assert.equal(result.text, '🚀 Launch: [SECRET] ✨ done!');
+      expect(result.text).toBe('🚀 Launch: [SECRET] ✨ done!');
     }
   });
 
   it('rejects ranges that split a Unicode surrogate pair', () => {
     const input = 'A🚀B'; // 'A' (idx 0), '🚀' (idx 1, 2: \uD83D\uDE80), 'B' (idx 3)
 
-    // Attempt to slice in the middle of the rocket emoji (start at 2, inside surrogate)
     const invalidTarget: RedactionTarget = {
       range: { start: 2, end: 3 },
       replacementText: '[SPLIT]',
     };
 
     const result = redact(input, [invalidTarget]);
-    assert.equal(result.success, false);
+    expect(result.success).toBe(false);
     if (!result.success) {
-      assert.equal(result.reason, 'surrogate_boundary_split');
+      expect(result.reason).toBe('surrogate_boundary_split');
     }
   });
 });

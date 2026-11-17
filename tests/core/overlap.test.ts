@@ -1,7 +1,6 @@
-import test, { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import { compareFindings, resolveOverlaps } from '../../src/core/overlap.ts';
-import type { Finding } from '../../src/core/types.ts';
+import { describe, expect, it } from 'vitest';
+import { compareFindings, resolveOverlaps } from '../../src/core/overlap';
+import type { Finding } from '../../src/core/types';
 
 describe('Core Overlap Module', () => {
   const createFinding = (
@@ -25,9 +24,9 @@ describe('Core Overlap Module', () => {
     const findings = [f1, f2, f3];
     const sorted = [...findings].sort(compareFindings);
 
-    assert.equal(sorted[0].id, 'a_early');
-    assert.equal(sorted[1].id, 'b_long'); // Longer takes precedence at index 10
-    assert.equal(sorted[2].id, 'c_short');
+    expect(sorted[0]?.id).toBe('a_early');
+    expect(sorted[1]?.id).toBe('b_long'); // Longer takes precedence at index 10
+    expect(sorted[2]?.id).toBe('c_short');
   });
 
   it('uses deterministic ID tie-breaking on identical ranges', () => {
@@ -35,8 +34,8 @@ describe('Core Overlap Module', () => {
     const f2 = createFinding('finding_a', 5, 15);
 
     const sorted = [f1, f2].sort(compareFindings);
-    assert.equal(sorted[0].id, 'finding_a');
-    assert.equal(sorted[1].id, 'finding_z');
+    expect(sorted[0]?.id).toBe('finding_a');
+    expect(sorted[1]?.id).toBe('finding_z');
   });
 
   it('keeps all disjoint findings intact', () => {
@@ -45,11 +44,8 @@ describe('Core Overlap Module', () => {
     const f3 = createFinding('f3', 30, 40);
 
     const resolved = resolveOverlaps([f2, f3, f1]);
-    assert.equal(resolved.length, 3);
-    assert.deepEqual(
-      resolved.map((f) => f.id),
-      ['f1', 'f2', 'f3']
-    );
+    expect(resolved.length).toBe(3);
+    expect(resolved.map((f) => f.id)).toEqual(['f1', 'f2', 'f3']);
   });
 
   it('keeps directly adjacent findings', () => {
@@ -57,11 +53,8 @@ describe('Core Overlap Module', () => {
     const f2 = createFinding('f2', 5, 10);
 
     const resolved = resolveOverlaps([f1, f2]);
-    assert.equal(resolved.length, 2);
-    assert.deepEqual(
-      resolved.map((f) => f.id),
-      ['f1', 'f2']
-    );
+    expect(resolved.length).toBe(2);
+    expect(resolved.map((f) => f.id)).toEqual(['f1', 'f2']);
   });
 
   it('merges partially overlapping findings to ensure complete sensitive range coverage', () => {
@@ -71,10 +64,10 @@ describe('Core Overlap Module', () => {
     const f2 = createFinding('finding_b', 30, 60);
 
     const resolved = resolveOverlaps([f1, f2]);
-    assert.equal(resolved.length, 1);
-    assert.equal(resolved[0].range.start, 10);
-    assert.equal(resolved[0].range.end, 60);
-    assert.equal(resolved[0].id, 'finding_a+finding_b');
+    expect(resolved.length).toBe(1);
+    expect(resolved[0]?.range.start).toBe(10);
+    expect(resolved[0]?.range.end).toBe(60);
+    expect(resolved[0]?.id).toBe('finding_a+finding_b');
   });
 
   it('merges transitively overlapping findings across multiple ranges', () => {
@@ -84,9 +77,9 @@ describe('Core Overlap Module', () => {
     const f3 = createFinding('f3', 40, 65);
 
     const resolved = resolveOverlaps([f2, f3, f1]);
-    assert.equal(resolved.length, 1);
-    assert.equal(resolved[0].range.start, 10);
-    assert.equal(resolved[0].range.end, 65);
+    expect(resolved.length).toBe(1);
+    expect(resolved[0]?.range.start).toBe(10);
+    expect(resolved[0]?.range.end).toBe(65);
   });
 
   it('subsumes contained finding inside a larger match without shrinking', () => {
@@ -94,15 +87,15 @@ describe('Core Overlap Module', () => {
     const child = createFinding('contained', 10, 20);
 
     const resolved = resolveOverlaps([child, parent]);
-    assert.equal(resolved.length, 1);
-    assert.equal(resolved[0].id, 'parent');
-    assert.equal(resolved[0].range.start, 0);
-    assert.equal(resolved[0].range.end, 30);
+    expect(resolved.length).toBe(1);
+    expect(resolved[0]?.id).toBe('parent');
+    expect(resolved[0]?.range.start).toBe(0);
+    expect(resolved[0]?.range.end).toBe(30);
   });
 
   it('handles empty and single-element arrays', () => {
-    assert.deepEqual(resolveOverlaps([]), []);
+    expect(resolveOverlaps([])).toEqual([]);
     const single = [createFinding('solo', 0, 10)];
-    assert.deepEqual(resolveOverlaps(single), single);
+    expect(resolveOverlaps(single)).toEqual(single);
   });
 });

@@ -1,4 +1,4 @@
-import type { RedactionResult, RedactionTarget, TextRange } from './types.ts';
+import type { RedactionResult, RedactionTarget, TextRange } from './types';
 
 function isLeadingSurrogate(code: number): boolean {
   return code >= 0xd800 && code <= 0xdbff;

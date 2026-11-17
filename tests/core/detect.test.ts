@@ -1,12 +1,11 @@
-import test, { describe, it } from 'node:test';
-import assert from 'node:assert/strict';
-import { detect } from '../../src/core/detect.ts';
-import type { DetectorRule, Finding } from '../../src/core/types.ts';
+import { describe, expect, it } from 'vitest';
+import { detect } from '../../src/core/detect';
+import type { DetectorRule, Finding } from '../../src/core/types';
 
 describe('Core Detect Module', () => {
   it('returns clean status for empty input', () => {
     const result = detect('');
-    assert.deepEqual(result, {
+    expect(result).toEqual({
       status: 'clean',
       findings: [],
     });
@@ -14,7 +13,7 @@ describe('Core Detect Module', () => {
 
   it('returns clean status when no rules are provided', () => {
     const result = detect('some arbitrary text');
-    assert.deepEqual(result, {
+    expect(result).toEqual({
       status: 'clean',
       findings: [],
     });
@@ -24,9 +23,9 @@ describe('Core Detect Module', () => {
     const largeText = 'a'.repeat(200);
     const result = detect(largeText, { maxInputLength: 100 });
 
-    assert.equal(result.status, 'limit_exceeded');
-    assert.equal(result.findings.length, 0);
-    assert.deepEqual(result.limitDetails, {
+    expect(result.status).toBe('limit_exceeded');
+    expect(result.findings.length).toBe(0);
+    expect(result.limitDetails).toEqual({
       reason: 'input_too_large',
       limit: 100,
       actual: 200,
@@ -37,7 +36,7 @@ describe('Core Detect Module', () => {
     const syntheticRule: DetectorRule = {
       id: 'mock_repeating_rule',
       category: 'mock_category',
-      detect: (text: string) => {
+      detect: () => {
         const matches: Finding[] = [];
         for (let i = 0; i < 10; i++) {
           matches.push({
@@ -57,9 +56,9 @@ describe('Core Detect Module', () => {
       maxFindings: 5,
     });
 
-    assert.equal(result.status, 'limit_exceeded');
-    assert.equal(result.findings.length, 0);
-    assert.deepEqual(result.limitDetails, {
+    expect(result.status).toBe('limit_exceeded');
+    expect(result.findings.length).toBe(0);
+    expect(result.limitDetails).toEqual({
       reason: 'too_many_findings',
       limit: 5,
       actual: 10,
@@ -90,21 +89,24 @@ describe('Core Detect Module', () => {
 
     const result = detect(text, { rules: [testRule] });
 
-    assert.equal(result.status, 'findings');
-    assert.equal(result.findings.length, 1);
+    expect(result.status).toBe('findings');
+    expect(result.findings.length).toBe(1);
     const finding = result.findings[0];
-    assert.equal(finding.category, 'github_pat_classic');
-    assert.equal(finding.mask, 'ghp_••••••••');
-    assert.equal(finding.replacementText, '[REDACTED_GITHUB_PAT]');
-    assert.deepEqual(finding.range, {
+    expect(finding).toBeDefined();
+    if (!finding) return;
+
+    expect(finding.category).toBe('github_pat_classic');
+    expect(finding.mask).toBe('ghp_••••••••');
+    expect(finding.replacementText).toBe('[REDACTED_GITHUB_PAT]');
+    expect(finding.range).toEqual({
       start: 7,
       end: 7 + syntheticPattern.length,
     });
 
     // Verify Zero Secret Retention: The raw secret string must not exist on the finding object
     const findingKeys = Object.keys(finding);
-    assert.equal(findingKeys.includes('rawSecret'), false);
-    assert.equal(findingKeys.includes('secret'), false);
-    assert.equal(findingKeys.includes('value'), false);
+    expect(findingKeys.includes('rawSecret')).toBe(false);
+    expect(findingKeys.includes('secret')).toBe(false);
+    expect(findingKeys.includes('value')).toBe(false);
   });
 });

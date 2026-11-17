@@ -1,9 +1,9 @@
-import { resolveOverlaps } from './overlap.ts';
+import { resolveOverlaps } from './overlap';
 import type {
   DetectionResult,
   DetectOptions,
   Finding,
-} from './types.ts';
+} from './types';
 
 export const DEFAULT_MAX_INPUT_LENGTH = 102_400; // ~100 KiB UTF-16 code units
 export const DEFAULT_MAX_FINDINGS = 50;

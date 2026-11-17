@@ -1,4 +1,4 @@
-import type { Finding } from './types.ts';
+import type { Finding } from './types';
 
 /**
  * Deterministically compares two findings.
@@ -31,11 +31,19 @@ export function resolveOverlaps(findings: readonly Finding[]): Finding[] {
   }
 
   const sorted = [...findings].sort(compareFindings);
+  const first = sorted[0];
+  if (!first) {
+    return [];
+  }
+
   const resolved: Finding[] = [];
-  let current = sorted[0];
+  let current: Finding = first;
 
   for (let i = 1; i < sorted.length; i++) {
     const candidate = sorted[i];
+    if (!candidate) {
+      continue;
+    }
 
     // If candidate starts before current ends, they overlap
     if (candidate.range.start < current.range.end) {
@@ -43,8 +51,10 @@ export function resolveOverlaps(findings: readonly Finding[]): Finding[] {
       const isExpanded = candidate.range.end > current.range.end;
 
       current = {
-        ...current,
         id: isExpanded ? `${current.id}+${candidate.id}` : current.id,
+        category: current.category,
+        mask: current.mask,
+        replacementText: current.replacementText,
         range: {
           start: current.range.start,
           end: mergedEnd,

@@ -70,7 +70,21 @@ Official GitHub token formats follow distinct prefix and payload structures:
 
 ---
 
-## 4. Test Matrix
+## 4. Generator Contract & Bounded Finding Budget
+
+In accordance with Issue #4 review feedback:
+- The detector rule contract yields findings via an iterable generator:
+  ```ts
+  detect(text: string): Iterable<Finding>;
+  ```
+- **Centralized Budget Management:** Rules do not allocate intermediate finding arrays. The `detect` orchestrator iterates findings on demand and immediately halts candidate generation upon encountering the first candidate beyond the shared `maxFindings` budget.
+- **Limit Enforcement Behavior:**
+  - Exactly-at-limit scans complete normally with `status: 'findings'`.
+  - Scans encountering candidates beyond the limit immediately abort without evaluating remaining rules or matches, returning `status: 'limit_exceeded'` and `findings: []`.
+
+---
+
+## 5. Test Matrix
 
 All contract tests use **strictly synthetic tokens**:
 - Positive tests: standalone tokens, shell exports, HTTP headers, Git URLs, Markdown code blocks, inline backticks, adjacent punctuation.

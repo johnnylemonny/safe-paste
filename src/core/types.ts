@@ -62,7 +62,7 @@ export interface DetectionResult {
 export interface DetectorRule {
   readonly id: string;
   readonly category: FindingCategory;
-  detect(text: string): readonly Finding[];
+  detect(text: string): Iterable<Finding>;
 }
 
 /**

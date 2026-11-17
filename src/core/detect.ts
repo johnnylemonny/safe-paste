@@ -52,20 +52,19 @@ export function detect(
   const rawFindings: Finding[] = [];
 
   for (const rule of rules) {
-    const findings = rule.detect(text);
-    rawFindings.push(...findings);
-
-    // Halt if finding cap is exceeded
-    if (rawFindings.length > maxFindings) {
-      return {
-        status: 'limit_exceeded',
-        findings: [],
-        limitDetails: {
-          reason: 'too_many_findings',
-          limit: maxFindings,
-          actual: rawFindings.length,
-        },
-      };
+    for (const finding of rule.detect(text)) {
+      if (rawFindings.length >= maxFindings) {
+        return {
+          status: 'limit_exceeded',
+          findings: [],
+          limitDetails: {
+            reason: 'too_many_findings',
+            limit: maxFindings,
+            actual: maxFindings + 1,
+          },
+        };
+      }
+      rawFindings.push(finding);
     }
   }
 

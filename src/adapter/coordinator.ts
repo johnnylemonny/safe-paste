@@ -56,26 +56,32 @@ export class PasteSessionCoordinator {
     const preSelectionStart = editor.selectionStart ?? 0;
     const preSelectionEnd = editor.selectionEnd ?? preSelectionStart;
 
-    // 5. Run detection over pasted plaintext
-    const detection = this.detectFn(pastedText);
-    if (detection.status !== 'findings' || detection.findings.length === 0) {
-      return;
-    }
-
-    // 6. One-time post-paste integrity verification (after native paste finishes)
-    queueMicrotask(() => {
+    // 5. Defer verification and detection until after native browser insertion finishes
+    setTimeout(() => {
       // If editor was detached or replaced during paste, abort
       if (typeof editor.isConnected === 'boolean' && !editor.isConnected) {
         return;
       }
 
-      const postPasteValue = editor.value;
-      const replacedSelectionLen = preSelectionEnd - preSelectionStart;
-      const insertedLen = postPasteValue.length - (prePasteValue.length - replacedSelectionLen);
+      // Verify the exact expected insertion before creating a session
+      const expectedValue =
+        prePasteValue.slice(0, preSelectionStart) +
+        pastedText +
+        prePasteValue.slice(preSelectionEnd);
+
+      if (editor.value !== expectedValue) {
+        return;
+      }
+
+      // Run detection over verified pasted plaintext
+      const detection = this.detectFn(pastedText);
+      if (detection.status !== 'findings' || detection.findings.length === 0) {
+        return;
+      }
 
       const targetRange = {
         start: preSelectionStart,
-        end: preSelectionStart + insertedLen,
+        end: preSelectionStart + pastedText.length,
       };
 
       // Invalidate existing session for this editor if present
@@ -89,7 +95,7 @@ export class PasteSessionCoordinator {
         editor,
         pastedText,
         targetRange,
-        snapshotValue: postPasteValue,
+        snapshotValue: expectedValue,
         findings: detection.findings,
       });
 
@@ -99,7 +105,7 @@ export class PasteSessionCoordinator {
       if (typeof this.onFindings === 'function') {
         this.onFindings(session);
       }
-    });
+    }, 0);
   }
 
   /**

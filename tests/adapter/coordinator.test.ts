@@ -45,6 +45,8 @@ function createMockPasteEvent(
   return { event, preventDefaultCalled };
 }
 
+const waitForDeferredTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
 describe('Adapter: PasteSessionCoordinator', () => {
   it('processes trusted paste on supported editor without calling preventDefault', async () => {
     const editor = createMockEditor('Header: ');
@@ -61,7 +63,9 @@ describe('Adapter: PasteSessionCoordinator', () => {
       },
     ];
 
+    let detectCallCount = 0;
     const mockDetect = (text: string): DetectionResult => {
+      detectCallCount++;
       if (text.includes('secret')) {
         return {
           status: 'findings',
@@ -82,16 +86,20 @@ describe('Adapter: PasteSessionCoordinator', () => {
     const pastedText = 'secret_token_123';
     const { event, preventDefaultCalled } = createMockPasteEvent(editor, pastedText, true);
 
-    // Native browser updates editor value after paste
+    // Native browser updates editor value after paste event returns
     coordinator.handlePasteEvent(event);
     expect(preventDefaultCalled).toBe(false);
+
+    // Detection is deferred and not yet called synchronously during event capture
+    expect(detectCallCount).toBe(0);
 
     // Simulate native paste insertion in editor
     editor.value = `Header: ${pastedText}`;
 
-    // Wait for microtask integrity check
-    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+    // Wait for macrotask insertion verification
+    await waitForDeferredTask();
 
+    expect(detectCallCount).toBe(1);
     expect(sessionReceived).not.toBeNull();
     const session = coordinator.getActiveSession(editor);
     expect(session).toBeDefined();
@@ -108,6 +116,43 @@ describe('Adapter: PasteSessionCoordinator', () => {
     }
   });
 
+  it('safely rejects session creation if actual inserted content does not match expected value', async () => {
+    const editor = createMockEditor('Existing content');
+    editor.selectionStart = 8;
+    editor.selectionEnd = 8;
+
+    let onFindingsCalled = false;
+    const coordinator = new PasteSessionCoordinator({
+      detectFn: () => ({
+        status: 'findings',
+        findings: [
+          {
+            id: 'f1',
+            category: 'github_pat_classic',
+            range: { start: 0, end: 5 },
+            mask: 'ghp_••••••••',
+            replacementText: '[REDACTED]',
+          },
+        ],
+      }),
+      onFindings: () => {
+        onFindingsCalled = true;
+      },
+    });
+
+    const { event } = createMockPasteEvent(editor, 'secret', true);
+    coordinator.handlePasteEvent(event);
+
+    // Simulate external transformation or cancellation by GitHub/extension:
+    // Expected value was "Existingsecret content", but editor content became something else
+    editor.value = 'Existing[transformed] content';
+
+    await waitForDeferredTask();
+
+    expect(onFindingsCalled).toBe(false);
+    expect(coordinator.getActiveSession(editor)).toBeUndefined();
+  });
+
   it('ignores untrusted (programmatic) paste events', async () => {
     const editor = createMockEditor('');
     let onFindingsCalled = false;
@@ -119,7 +164,7 @@ describe('Adapter: PasteSessionCoordinator', () => {
 
     const { event } = createMockPasteEvent(editor, 'secret', false); // isTrusted: false
     coordinator.handlePasteEvent(event);
-    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+    await waitForDeferredTask();
 
     expect(onFindingsCalled).toBe(false);
     expect(coordinator.getActiveSession(editor)).toBeUndefined();
@@ -140,7 +185,7 @@ describe('Adapter: PasteSessionCoordinator', () => {
 
     const { event } = createMockPasteEvent(inputElement, 'secret', true);
     coordinator.handlePasteEvent(event);
-    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+    await waitForDeferredTask();
 
     expect(onFindingsCalled).toBe(false);
   });
@@ -165,7 +210,9 @@ describe('Adapter: PasteSessionCoordinator', () => {
     const { event: event1 } = createMockPasteEvent(editor, 'secret1');
     coordinator.handlePasteEvent(event1);
     editor.value = 'secret1';
-    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+    editor.selectionStart = 7;
+    editor.selectionEnd = 7;
+    await waitForDeferredTask();
 
     const session1 = coordinator.getActiveSession(editor);
     expect(session1?.status).toBe('active');
@@ -174,7 +221,7 @@ describe('Adapter: PasteSessionCoordinator', () => {
     const { event: event2 } = createMockPasteEvent(editor, 'secret2');
     coordinator.handlePasteEvent(event2);
     editor.value = 'secret1secret2';
-    await new Promise<void>((resolve) => queueMicrotask(() => resolve()));
+    await waitForDeferredTask();
 
     const session2 = coordinator.getActiveSession(editor);
     expect(session1?.status).toBe('dismissed');

@@ -28,10 +28,13 @@ The Adapter layer coordinates browser events, transient in-memory paste sessions
 - Supported targets are verified `HTMLTextAreaElement` instances matching GitHub comment and issue selectors (`.js-comment-field`, `[name="issue[body]"]`, `[name="comment[body]"]`).
 - Document-level event delegation eliminates the need for expensive `MutationObserver` instances, effortlessly supporting dynamically mounted, tab-swapped (*Write* / *Preview*), and inline comment editors.
 
-### 2.3 Post-Paste One-Time Integrity Check
-- Immediately upon receiving the paste event, the pre-paste selection and value length are recorded.
-- In a scheduled post-paste microtask (`queueMicrotask`), once the native browser paste operation has written to the textarea, the exact inserted target range `[start, end)` is resolved and verified against the captured plaintext.
-- A transient `PasteSession` is created with a finite lifetime (default: 60s TTL).
+### 2.3 Post-Paste One-Time Insertion & Integrity Check
+- Immediately upon receiving the paste event, the pre-paste selection and value are recorded.
+- In a deferred macrotask (`setTimeout(..., 0)`), scheduled after the native browser paste operation completes its default insertion into the textarea:
+  - The actual editor value is strictly compared against the expected value (`prePaste.slice(0, start) + pastedText + prePaste.slice(end)`).
+  - If GitHub cancelled, transformed, or intercepted the paste, session creation is safely aborted.
+  - Plaintext detection runs over the verified insertion, keeping the capture-phase event listener near-zero overhead.
+  - A transient `PasteSession` is created with a finite lifetime (default: 60s TTL).
 
 ### 2.4 Stale Content Protection (Pre-Write Integrity Check)
 - SafePaste explicitly does **not** monitor input, keyboard, or mouse events while reviewing.

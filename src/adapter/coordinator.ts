@@ -5,21 +5,34 @@ import { extractPastedPlaintext, isSupportedGitHubEditor, isTrustedEvent } from 
 import { applyRedactionToEditor, type ReplacementResult } from './replacement';
 import {
   createPasteSession,
+  disposePasteSession,
   type PasteSession,
+  type PasteSessionInfo,
+  type SessionStatus,
 } from './session';
 
 export interface AdapterOptions {
   readonly root?: Document | HTMLElement;
   readonly detectFn?: (text: string) => DetectionResult;
   readonly redactFn?: (text: string, targets: Parameters<typeof redact>[1]) => RedactionResult;
-  readonly onFindings?: (session: PasteSession) => void;
+  readonly onFindings?: (sessionInfo: PasteSessionInfo) => void;
 }
+
+export type SessionTarget =
+  | string
+  | HTMLTextAreaElement
+  | PasteSession
+  | PasteSessionInfo;
 
 export class PasteSessionCoordinator {
   private readonly activeSessions = new WeakMap<HTMLTextAreaElement, PasteSession>();
+  private readonly sessionsById = new Map<string, PasteSession>();
+  private readonly pendingTimeouts = new WeakMap<HTMLTextAreaElement, ReturnType<typeof setTimeout>>();
+  private readonly sessionTtlTimeouts = new Map<string, ReturnType<typeof setTimeout>>();
+
   private readonly detectFn: (text: string) => DetectionResult;
   private readonly redactFn: (text: string, targets: Parameters<typeof redact>[1]) => RedactionResult;
-  private readonly onFindings: ((session: PasteSession) => void) | undefined;
+  private readonly onFindings: ((sessionInfo: PasteSessionInfo) => void) | undefined;
 
   constructor(options: AdapterOptions = {}) {
     this.detectFn = options.detectFn ?? detect;
@@ -29,6 +42,29 @@ export class PasteSessionCoordinator {
 
   public getActiveSession(editor: HTMLTextAreaElement): PasteSession | undefined {
     return this.activeSessions.get(editor);
+  }
+
+  public getSessionById(sessionId: string): PasteSession | undefined {
+    return this.sessionsById.get(sessionId);
+  }
+
+  /**
+   * Centralized disposal helper: cancels timers, removes session mappings,
+   * transitions status, and clears sensitive in-memory strings.
+   */
+  public disposeSession(session: PasteSession, status: SessionStatus = 'dismissed'): void {
+    const ttlTimer = this.sessionTtlTimeouts.get(session.id);
+    if (ttlTimer !== undefined) {
+      clearTimeout(ttlTimer);
+      this.sessionTtlTimeouts.delete(session.id);
+    }
+
+    this.sessionsById.delete(session.id);
+    if (this.activeSessions.get(session.editor) === session) {
+      this.activeSessions.delete(session.editor);
+    }
+
+    disposePasteSession(session, status);
   }
 
   public handlePasteEvent(event: ClipboardEvent): void {
@@ -45,19 +81,34 @@ export class PasteSessionCoordinator {
 
     const editor: HTMLTextAreaElement = target;
 
-    // 3. Extract plaintext without blocking or modifying native paste
+    // 3. Centralized immediate invalidation on new supported paste:
+    // Any new paste immediately cancels pending callbacks and invalidates prior sessions on this editor.
+    const pendingTimer = this.pendingTimeouts.get(editor);
+    if (pendingTimer !== undefined) {
+      clearTimeout(pendingTimer);
+      this.pendingTimeouts.delete(editor);
+    }
+
+    const existingSession = this.activeSessions.get(editor);
+    if (existingSession) {
+      this.disposeSession(existingSession, 'dismissed');
+    }
+
+    // 4. Extract plaintext without blocking or modifying native paste
     const pastedText = extractPastedPlaintext(event);
     if (!pastedText) {
       return;
     }
 
-    // 4. Capture pre-paste editor state
+    // 5. Capture pre-paste editor state
     const prePasteValue = editor.value;
     const preSelectionStart = editor.selectionStart ?? 0;
     const preSelectionEnd = editor.selectionEnd ?? preSelectionStart;
 
-    // 5. Defer verification and detection until after native browser insertion finishes
-    setTimeout(() => {
+    // 6. Defer verification and detection until after native browser insertion finishes
+    const timer = setTimeout(() => {
+      this.pendingTimeouts.delete(editor);
+
       // If editor was detached or replaced during paste, abort
       if (typeof editor.isConnected === 'boolean' && !editor.isConnected) {
         return;
@@ -84,12 +135,6 @@ export class PasteSessionCoordinator {
         end: preSelectionStart + pastedText.length,
       };
 
-      // Invalidate existing session for this editor if present
-      const previousSession = this.activeSessions.get(editor);
-      if (previousSession && previousSession.status === 'active') {
-        previousSession.status = 'dismissed';
-      }
-
       // Create new session
       const session = createPasteSession({
         editor,
@@ -100,18 +145,67 @@ export class PasteSessionCoordinator {
       });
 
       this.activeSessions.set(editor, session);
+      this.sessionsById.set(session.id, session);
 
-      // Notify consumer / UI
+      // Schedule automated TTL expiration and disposal
+      const ttlTimer = setTimeout(() => {
+        this.disposeSession(session, 'expired');
+      }, session.ttlMs);
+      this.sessionTtlTimeouts.set(session.id, ttlTimer);
+
+      // Notify consumer / UI with safe metadata only (no raw secrets or full snapshots)
       if (typeof this.onFindings === 'function') {
-        this.onFindings(session);
+        const sessionInfo: PasteSessionInfo = {
+          sessionId: session.id,
+          editor: session.editor,
+          findings: session.findings,
+        };
+        this.onFindings(sessionInfo);
       }
     }, 0);
+
+    this.pendingTimeouts.set(editor, timer);
+  }
+
+  private resolveSession(target: SessionTarget): PasteSession | undefined {
+    if (typeof target === 'string') {
+      return this.sessionsById.get(target);
+    }
+    if (typeof (target as HTMLTextAreaElement).tagName === 'string') {
+      return this.activeSessions.get(target as HTMLTextAreaElement);
+    }
+    if (typeof (target as PasteSessionInfo).sessionId === 'string') {
+      return this.sessionsById.get((target as PasteSessionInfo).sessionId);
+    }
+    if (typeof (target as PasteSession).id === 'string') {
+      return this.sessionsById.get((target as PasteSession).id);
+    }
+    return undefined;
   }
 
   /**
-   * Executes redaction for an active session.
+   * Executes redaction for an active session. Ensures that only the currently active
+   * session can perform redaction and releases sensitive data immediately upon completion.
    */
-  public executeRedaction(session: PasteSession, now?: number): ReplacementResult {
+  public executeRedaction(target: SessionTarget, now?: number): ReplacementResult {
+    const session = this.resolveSession(target);
+
+    // Validate that session exists, is active, and is the current active session for its editor
+    if (
+      !session ||
+      session.status !== 'active' ||
+      this.activeSessions.get(session.editor) !== session
+    ) {
+      if (session) {
+        this.disposeSession(session, session.status);
+      }
+      return {
+        success: false,
+        reason: 'invalid_status',
+        error: 'The redaction session is no longer active.',
+      };
+    }
+
     const redactionTargets = session.findings.map((f) => ({
       range: f.range,
       replacementText: f.replacementText,
@@ -119,7 +213,7 @@ export class PasteSessionCoordinator {
 
     const redaction = this.redactFn(session.pastedText, redactionTargets);
     if (!redaction.success) {
-      session.status = 'stale';
+      this.disposeSession(session, 'stale');
       return {
         success: false,
         reason: 'stale',
@@ -127,15 +221,21 @@ export class PasteSessionCoordinator {
       };
     }
 
-    return applyRedactionToEditor(session, redaction.text, now);
+    const result = applyRedactionToEditor(session, redaction.text, now);
+
+    // Release sensitive data immediately upon completion (success or error)
+    this.disposeSession(session, result.success ? 'redacted' : 'stale');
+
+    return result;
   }
 
   /**
-   * Dismisses an active session.
+   * Dismisses an active session and immediately clears retained sensitive data.
    */
-  public dismissSession(session: PasteSession): void {
-    if (session.status === 'active') {
-      session.status = 'dismissed';
+  public dismissSession(target: SessionTarget): void {
+    const session = this.resolveSession(target);
+    if (session) {
+      this.disposeSession(session, 'dismissed');
     }
   }
 }

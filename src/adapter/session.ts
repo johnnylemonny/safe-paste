@@ -9,11 +9,20 @@ export interface PasteSession {
   readonly editor: HTMLTextAreaElement;
   readonly createdAt: number;
   readonly ttlMs: number;
-  readonly pastedText: string;
+  pastedText: string;
   readonly targetRange: { readonly start: number; readonly end: number };
-  readonly snapshotValue: string;
+  snapshotValue: string;
   readonly findings: readonly Finding[];
   status: SessionStatus;
+}
+
+/**
+ * Public, secret-free metadata exposed to UI/consumers without raw secrets or snapshots.
+ */
+export interface PasteSessionInfo {
+  readonly sessionId: string;
+  readonly editor: HTMLTextAreaElement;
+  readonly findings: readonly Finding[];
 }
 
 let sessionCounter = 0;
@@ -45,6 +54,21 @@ export function createPasteSession(params: {
   };
 }
 
+/**
+ * Disposes a session, transitioning its status and releasing sensitive in-memory
+ * strings (pastedText and snapshotValue) immediately.
+ */
+export function disposePasteSession(
+  session: PasteSession,
+  status: SessionStatus = 'dismissed'
+): void {
+  if (session.status === 'active') {
+    session.status = status;
+  }
+  session.pastedText = '';
+  session.snapshotValue = '';
+}
+
 export function isSessionExpired(session: PasteSession, now: number = Date.now()): boolean {
   return now - session.createdAt >= session.ttlMs;
 }
@@ -69,7 +93,7 @@ export function validateSessionIntegrity(
   }
 
   if (isSessionExpired(session, now)) {
-    session.status = 'expired';
+    disposePasteSession(session, 'expired');
     return {
       valid: false,
       reason: 'expired',
@@ -78,7 +102,7 @@ export function validateSessionIntegrity(
   }
 
   if (currentValue !== session.snapshotValue) {
-    session.status = 'stale';
+    disposePasteSession(session, 'stale');
     return {
       valid: false,
       reason: 'stale',

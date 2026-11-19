@@ -1,16 +1,14 @@
-export const GITHUB_TEXTAREA_SELECTORS = [
-  'textarea.js-comment-field',
-  'textarea.comment-form-textarea',
+export const SUPPORTED_GITHUB_EDITOR_SELECTORS = [
   'textarea#issue_body',
   'textarea[name="issue[body]"]',
+  'textarea#new_comment_field',
   'textarea[name="comment[body]"]',
-  'textarea[name="pull_request_review_comment[body]"]',
-  'textarea[placeholder*="comment" i]',
-  'textarea[placeholder*="leave a comment" i]',
+  'textarea.js-comment-field',
 ] as const;
 
 /**
- * Validates if a target element is a supported GitHub textarea editor.
+ * Validates if a target element is a supported GitHub textarea editor
+ * restricted strictly to GitHub issue descriptions and issue comments.
  */
 export function isSupportedGitHubEditor(target: unknown): target is HTMLTextAreaElement {
   if (!target || typeof target !== 'object') {
@@ -22,32 +20,28 @@ export function isSupportedGitHubEditor(target: unknown): target is HTMLTextArea
     return false;
   }
 
-  // If matches function is available (standard in DOM)
+  // Check strict allowlist using matches if available
   if (typeof el.matches === 'function') {
-    for (const selector of GITHUB_TEXTAREA_SELECTORS) {
+    for (const selector of SUPPORTED_GITHUB_EDITOR_SELECTORS) {
       if (el.matches(selector)) {
         return true;
       }
     }
+    return false;
   }
 
-  // Fallback heuristic: check name, id, or className attributes
-  const name = el.name ?? '';
+  // Exact fallback check for environments without Element.prototype.matches
   const id = el.id ?? '';
+  const name = el.name ?? '';
   const className = el.className ?? '';
 
-  if (
-    name.includes('body') ||
-    name.includes('comment') ||
-    id.includes('issue_body') ||
-    id.includes('comment') ||
-    className.includes('comment-form') ||
-    className.includes('js-comment')
-  ) {
-    return true;
-  }
-
-  return false;
+  return (
+    id === 'issue_body' ||
+    name === 'issue[body]' ||
+    id === 'new_comment_field' ||
+    name === 'comment[body]' ||
+    className.split(/\s+/).includes('js-comment-field')
+  );
 }
 
 /**

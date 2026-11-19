@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { PasteSessionCoordinator } from '../../src/adapter/coordinator';
+import type { PasteSessionInfo } from '../../src/adapter/session';
 import type { DetectionResult } from '../../src/core/types';
 
 function createMockEditor(initialValue = ''): HTMLTextAreaElement {
@@ -48,7 +49,7 @@ function createMockPasteEvent(
 const waitForDeferredTask = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 describe('Adapter: PasteSessionCoordinator', () => {
-  it('processes trusted paste on supported editor without calling preventDefault', async () => {
+  it('processes trusted paste on supported editor without calling preventDefault and yields safe sessionInfo', async () => {
     const editor = createMockEditor('Header: ');
     editor.selectionStart = 8;
     editor.selectionEnd = 8;
@@ -75,11 +76,11 @@ describe('Adapter: PasteSessionCoordinator', () => {
       return { status: 'clean', findings: [] };
     };
 
-    let sessionReceived: unknown = null;
+    let sessionInfoReceived: PasteSessionInfo | null = null;
     const coordinator = new PasteSessionCoordinator({
       detectFn: mockDetect,
-      onFindings: (session) => {
-        sessionReceived = session;
+      onFindings: (sessionInfo) => {
+        sessionInfoReceived = sessionInfo;
       },
     });
 
@@ -100,20 +101,101 @@ describe('Adapter: PasteSessionCoordinator', () => {
     await waitForDeferredTask();
 
     expect(detectCallCount).toBe(1);
-    expect(sessionReceived).not.toBeNull();
+    expect(sessionInfoReceived).not.toBeNull();
+    // Consumer receives safe metadata only (no raw secrets or snapshot strings)
+    expect(sessionInfoReceived!.sessionId).toMatch(/^session_\d+_\d+$/);
+    expect(sessionInfoReceived!.editor).toBe(editor);
+    expect(sessionInfoReceived!.findings).toEqual(mockFindings);
+    expect(sessionInfoReceived).not.toHaveProperty('pastedText');
+    expect(sessionInfoReceived).not.toHaveProperty('snapshotValue');
+
     const session = coordinator.getActiveSession(editor);
     expect(session).toBeDefined();
     expect(session?.status).toBe('active');
     expect(session?.targetRange).toEqual({ start: 8, end: 8 + pastedText.length });
     expect(session?.snapshotValue).toBe(`Header: ${pastedText}`);
 
-    // Now execute redaction
-    if (session) {
-      const redactResult = coordinator.executeRedaction(session);
+    // Now execute redaction using sessionInfo
+    if (sessionInfoReceived) {
+      const redactResult = coordinator.executeRedaction(sessionInfoReceived);
       expect(redactResult.success).toBe(true);
       expect(editor.value).toBe('Header: [REDACTED_PAT]_123');
-      expect(session.status).toBe('redacted');
+      expect(session?.status).toBe('redacted');
+      // Sensitive data must be cleared from the session upon redaction completion
+      expect(session?.pastedText).toBe('');
+      expect(session?.snapshotValue).toBe('');
     }
+  });
+
+  it('immediately invalidates and disposes previous session upon a new paste even if the new paste has no findings', async () => {
+    const editor = createMockEditor('');
+    const mockFindings = [
+      {
+        id: 'f1',
+        category: 'github_pat_classic' as const,
+        range: { start: 0, end: 6 },
+        mask: 'ghp_••••••••',
+        replacementText: '[REDACTED]',
+      },
+    ];
+
+    const coordinator = new PasteSessionCoordinator({
+      detectFn: (text) =>
+        text.includes('secret')
+          ? { status: 'findings', findings: mockFindings }
+          : { status: 'clean', findings: [] },
+    });
+
+    // 1st paste: with secret
+    const { event: event1 } = createMockPasteEvent(editor, 'secret1');
+    coordinator.handlePasteEvent(event1);
+    editor.value = 'secret1';
+    editor.selectionStart = 7;
+    editor.selectionEnd = 7;
+    await waitForDeferredTask();
+
+    const session1 = coordinator.getActiveSession(editor);
+    expect(session1?.status).toBe('active');
+    expect(session1?.pastedText).toBe('secret1');
+
+    // 2nd paste: clean paste with no findings
+    const { event: event2 } = createMockPasteEvent(editor, 'clean text');
+    coordinator.handlePasteEvent(event2); // New paste starts immediately
+
+    // Session 1 must be immediately dismissed and its sensitive data cleared synchronously on paste
+    expect(session1?.status).toBe('dismissed');
+    expect(session1?.pastedText).toBe('');
+    expect(session1?.snapshotValue).toBe('');
+
+    editor.value = 'secret1clean text';
+    await waitForDeferredTask();
+
+    // Since 2nd paste was clean, no new session should be active
+    expect(coordinator.getActiveSession(editor)).toBeUndefined();
+  });
+
+  it('cancels pending paste callback if another paste occurs before macrotask executes', async () => {
+    const editor = createMockEditor('');
+    let detectCalls = 0;
+    const coordinator = new PasteSessionCoordinator({
+      detectFn: () => {
+        detectCalls++;
+        return { status: 'clean', findings: [] };
+      },
+    });
+
+    const { event: event1 } = createMockPasteEvent(editor, 'fast1');
+    coordinator.handlePasteEvent(event1);
+
+    // Immediately paste again before macrotask resolves
+    const { event: event2 } = createMockPasteEvent(editor, 'fast2');
+    coordinator.handlePasteEvent(event2);
+
+    editor.value = 'fast2';
+    await waitForDeferredTask();
+
+    // Only the second paste's deferred callback runs
+    expect(detectCalls).toBe(1);
   });
 
   it('safely rejects session creation if actual inserted content does not match expected value', async () => {
@@ -144,13 +226,51 @@ describe('Adapter: PasteSessionCoordinator', () => {
     coordinator.handlePasteEvent(event);
 
     // Simulate external transformation or cancellation by GitHub/extension:
-    // Expected value was "Existingsecret content", but editor content became something else
     editor.value = 'Existing[transformed] content';
 
     await waitForDeferredTask();
 
     expect(onFindingsCalled).toBe(false);
     expect(coordinator.getActiveSession(editor)).toBeUndefined();
+  });
+
+  it('ensures only the currently active session can execute redaction', async () => {
+    const editor = createMockEditor('');
+    let capturedSessionInfo: PasteSessionInfo | null = null;
+    const coordinator = new PasteSessionCoordinator({
+      detectFn: () => ({
+        status: 'findings',
+        findings: [
+          {
+            id: 'f1',
+            category: 'github_pat_classic',
+            range: { start: 0, end: 6 },
+            mask: 'ghp_••••••••',
+            replacementText: '[REDACTED]',
+          },
+        ],
+      }),
+      onFindings: (info) => {
+        capturedSessionInfo = info;
+      },
+    });
+
+    const { event } = createMockPasteEvent(editor, 'secret');
+    coordinator.handlePasteEvent(event);
+    editor.value = 'secret';
+    await waitForDeferredTask();
+
+    expect(capturedSessionInfo).not.toBeNull();
+
+    // Dismiss the session
+    coordinator.dismissSession(capturedSessionInfo!.sessionId);
+
+    // Attempting redaction on a dismissed session must be safely rejected
+    const redactResult = coordinator.executeRedaction(capturedSessionInfo!.sessionId);
+    expect(redactResult.success).toBe(false);
+    if (!redactResult.success) {
+      expect(redactResult.reason).toBe('invalid_status');
+    }
   });
 
   it('ignores untrusted (programmatic) paste events', async () => {
@@ -188,44 +308,5 @@ describe('Adapter: PasteSessionCoordinator', () => {
     await waitForDeferredTask();
 
     expect(onFindingsCalled).toBe(false);
-  });
-
-  it('supersedes previous active session when new paste occurs on the same editor', async () => {
-    const editor = createMockEditor('');
-    const mockFindings = [
-      {
-        id: 'f1',
-        category: 'github_pat_classic' as const,
-        range: { start: 0, end: 6 },
-        mask: 'ghp_••••••••',
-        replacementText: '[REDACTED]',
-      },
-    ];
-
-    const coordinator = new PasteSessionCoordinator({
-      detectFn: () => ({ status: 'findings', findings: mockFindings }),
-    });
-
-    // First paste
-    const { event: event1 } = createMockPasteEvent(editor, 'secret1');
-    coordinator.handlePasteEvent(event1);
-    editor.value = 'secret1';
-    editor.selectionStart = 7;
-    editor.selectionEnd = 7;
-    await waitForDeferredTask();
-
-    const session1 = coordinator.getActiveSession(editor);
-    expect(session1?.status).toBe('active');
-
-    // Second paste
-    const { event: event2 } = createMockPasteEvent(editor, 'secret2');
-    coordinator.handlePasteEvent(event2);
-    editor.value = 'secret1secret2';
-    await waitForDeferredTask();
-
-    const session2 = coordinator.getActiveSession(editor);
-    expect(session1?.status).toBe('dismissed');
-    expect(session2?.status).toBe('active');
-    expect(session2?.id).not.toBe(session1?.id);
   });
 });

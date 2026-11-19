@@ -3,36 +3,41 @@ import {
   isSupportedGitHubEditor,
   extractPastedPlaintext,
   isTrustedEvent,
+  SUPPORTED_GITHUB_EDITOR_SELECTORS,
 } from '../../src/adapter/editor';
 
 describe('Adapter: Editor Recognition & Event Helpers', () => {
   describe('isSupportedGitHubEditor', () => {
     it('identifies GitHub issue and comment textareas by selector matching', () => {
-      const mockTextarea = {
-        tagName: 'TEXTAREA',
-        matches: (selector: string) => selector === 'textarea.js-comment-field',
-      };
-      expect(isSupportedGitHubEditor(mockTextarea)).toBe(true);
+      for (const selector of SUPPORTED_GITHUB_EDITOR_SELECTORS) {
+        const mockTextarea = {
+          tagName: 'TEXTAREA',
+          matches: (sel: string) => sel === selector,
+        };
+        expect(isSupportedGitHubEditor(mockTextarea)).toBe(true);
+      }
     });
 
-    it('identifies textareas by name and id attributes via fallback', () => {
-      const issueBody = {
-        tagName: 'TEXTAREA',
-        name: 'issue[body]',
-      };
-      expect(isSupportedGitHubEditor(issueBody)).toBe(true);
+    it('identifies textareas by exact name, id, and class attributes via fallback', () => {
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', name: 'issue[body]' })).toBe(true);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', id: 'issue_body' })).toBe(true);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', name: 'comment[body]' })).toBe(true);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', id: 'new_comment_field' })).toBe(true);
+      expect(
+        isSupportedGitHubEditor({
+          tagName: 'TEXTAREA',
+          className: 'form-control js-comment-field js-paste-markdown',
+        })
+      ).toBe(true);
+    });
 
-      const commentBody = {
-        tagName: 'TEXTAREA',
-        name: 'comment[body]',
-      };
-      expect(isSupportedGitHubEditor(commentBody)).toBe(true);
-
-      const issueId = {
-        tagName: 'TEXTAREA',
-        id: 'issue_body',
-      };
-      expect(isSupportedGitHubEditor(issueId)).toBe(true);
+    it('rejects generic or unrelated textareas outside the strict allowlist', () => {
+      // Formerly accepted by broad substring matching, now strictly rejected
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', name: 'post_body' })).toBe(false);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', name: 'user[bio]' })).toBe(false);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', name: 'repo[description]' })).toBe(false);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', id: 'commit_comment_body' })).toBe(false);
+      expect(isSupportedGitHubEditor({ tagName: 'TEXTAREA', className: 'generic-comment-box' })).toBe(false);
     });
 
     it('rejects input elements, contenteditables, and other tags', () => {
@@ -79,7 +84,7 @@ describe('Adapter: Editor Recognition & Event Helpers', () => {
   });
 
   describe('isTrustedEvent', () => {
-    it('returns true only when isTrusted is explicitly true', () => {
+    it('returns true only for trusted user events', () => {
       expect(isTrustedEvent({ isTrusted: true } as Event)).toBe(true);
       expect(isTrustedEvent({ isTrusted: false } as Event)).toBe(false);
       expect(isTrustedEvent({} as Event)).toBe(false);

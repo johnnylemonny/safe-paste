@@ -1,4 +1,4 @@
-import { mountWarningBanner } from '../ui';
+import { dismissWarningBanner, mountWarningBanner } from '../ui';
 import { PasteSessionCoordinator } from './coordinator';
 
 /**
@@ -7,6 +7,7 @@ import { PasteSessionCoordinator } from './coordinator';
  * 2. Runs pure client-side detection over pasted plaintext.
  * 3. Mounts an accessible warning banner when findings are present.
  * 4. Enables one-click safe redaction without modifying GitHub textarea rendering.
+ * 5. Automatically dismisses stale warning banners when a session is invalidated (e.g. clean paste).
  */
 export function initSafePaste(): () => void {
   const coordinator = new PasteSessionCoordinator({
@@ -16,6 +17,9 @@ export function initSafePaste(): () => void {
         onRedact: (activeSession) => coordinator.executeRedaction(activeSession),
         onDismiss: (activeSession) => coordinator.dismissSession(activeSession),
       });
+    },
+    onSessionInvalidated: (_sessionId, editor) => {
+      dismissWarningBanner(editor);
     },
   });
 

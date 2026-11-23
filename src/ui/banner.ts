@@ -208,3 +208,24 @@ export function mountWarningBanner(options: WarningBannerOptions): WarningBanner
   activeBanners.set(editor, handle);
   return handle;
 }
+
+/**
+ * Dismisses and unmounts any currently active warning banner associated with the given editor.
+ * Returns true if an active banner was dismissed, false otherwise.
+ */
+export function dismissWarningBanner(editor: HTMLTextAreaElement): boolean {
+  const existingHandle = activeBanners.get(editor);
+  if (existingHandle && existingHandle.isMounted()) {
+    existingHandle.dismiss();
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Returns whether a warning banner is currently mounted for the given editor.
+ */
+export function hasActiveWarningBanner(editor: HTMLTextAreaElement): boolean {
+  const handle = activeBanners.get(editor);
+  return handle !== undefined && handle.isMounted();
+}

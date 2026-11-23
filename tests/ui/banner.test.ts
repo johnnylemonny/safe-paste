@@ -1,7 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { PasteSessionInfo } from '../../src/adapter/session';
 import type { Finding } from '../../src/core/types';
-import { mountWarningBanner } from '../../src/ui/banner';
+import {
+  dismissWarningBanner,
+  hasActiveWarningBanner,
+  mountWarningBanner,
+} from '../../src/ui/banner';
 import { createMockDocument, MockElement } from './helpers/mock-dom';
 
 function createMockEditor(parent: MockElement): HTMLTextAreaElement {
@@ -239,5 +243,36 @@ describe('UI Banner: mountWarningBanner', () => {
 
     expect(handle.isMounted()).toBe(false);
     expect(onDismiss).toHaveBeenCalledTimes(1);
+  });
+
+  describe('dismissWarningBanner & hasActiveWarningBanner lifecycle', () => {
+    it('dismisses active warning banner by editor reference and returns status', () => {
+      const onDismiss = vi.fn();
+      const session = createMockSessionInfo(editor, [mockFindingClassic]);
+
+      expect(hasActiveWarningBanner(editor)).toBe(false);
+      expect(dismissWarningBanner(editor)).toBe(false);
+
+      const handle = mountWarningBanner({
+        session,
+        doc,
+        container: container as unknown as HTMLElement,
+        onRedact: vi.fn(),
+        onDismiss,
+      });
+
+      expect(hasActiveWarningBanner(editor)).toBe(true);
+      expect(handle.isMounted()).toBe(true);
+
+      const dismissed = dismissWarningBanner(editor);
+      expect(dismissed).toBe(true);
+      expect(hasActiveWarningBanner(editor)).toBe(false);
+      expect(handle.isMounted()).toBe(false);
+      expect(container.children).not.toContain(handle.element as unknown as MockElement);
+      expect(onDismiss).toHaveBeenCalledTimes(1);
+
+      // Calling dismissWarningBanner again when unmounted returns false
+      expect(dismissWarningBanner(editor)).toBe(false);
+    });
   });
 });
